@@ -384,7 +384,5 @@ $RECYCLE.BIN/
 
 .idea
 src/log/*/*/*.pth
-pubmed_subgraph/processed/*
-!pubmed_subgraph/processed/.gitkeep
-pubmed_subgraph/raw/*
+dataset/
 !*.gitkeep

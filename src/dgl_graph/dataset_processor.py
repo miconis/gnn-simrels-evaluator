@@ -1,7 +1,6 @@
 #  process raw pubmed subgraph to extract authors and create relations
 from pyspark import SparkConf, SparkContext
 from pyspark.sql import SparkSession
-import json
 from src.utils.utility import *
 import copy
 import random
@@ -50,8 +49,15 @@ def insert_error(author):
     return author
 
 
+def inject_embedding(x):
+    pub = x[1][0]
+    pub['bert_embedding'] = x[1][1]
+    return pub
+
+
 def mapAuthors(publication):
     pub_id = publication['id']
+    pub_bert_embedding = publication['bert_embedding']
     coauthors_full = []
     authors = []
     relations = []
@@ -96,6 +102,7 @@ def mapAuthors(publication):
                      orcid=author['orcid'],
                      id=author['id'],
                      pub_id=pub_id,
+                     pub_embedding=pub_bert_embedding,
                      coauthors=coauthors,
                      key=lnfi(author))
 
@@ -109,30 +116,25 @@ def mapAuthors(publication):
 if __name__ == "__main__":
 
     # read raw data as extracted from the OpenAIRE dump
-    publications = sc.textFile("../../dataset/raw_pubmed_subgraph/publications").map(json.loads)
+    publications = sc.textFile("../../dataset/raw_pubmed_subgraph/publications").map(json.loads).map(lambda x: (x['id'], x))
+    publications = publications.reduceByKey(lambda a, b: a)  # remove repeating ids
+    publications_embeddings = spark.read.load("../../dataset/raw_pubmed_subgraph/publications_pubmed_bert_embeddings").rdd.map(lambda x: (x['id'], x['bert_embedding']))
+    publications_embeddings = publications_embeddings.reduceByKey(lambda a, b: a)  # remove repeating ids
+
+    # inject bert embeddings into the OpenAIRE data
+    publications = publications.leftOuterJoin(publications_embeddings).map(inject_embedding)
+
     relations = sc.textFile("../../dataset/raw_pubmed_subgraph/relations").map(json.loads)
 
     # create authors and relations
     authors_relations = publications.map(mapAuthors)
-    authors = authors_relations.flatMap(lambda x: x[0])
+    authors = authors_relations.flatMap(lambda x: x[0]).map(lambda x: (x['id'], x)).reduceByKey(lambda a, b: a).map(lambda x: x[1])
     relations = relations.union(authors_relations.flatMap(lambda x: x[1]))
 
     # insert errors in the dataset
     authors = authors.map(insert_error)
 
-    # print dataset statistics
-    print("Number of publications: ", publications.count())
-    print("Number of relations: ", relations.count())
-    for item in relations.map(lambda x: (str(x['sourceType']) + "<--(" + str(x['relClass']) + ")-->" + str(x['targetType']), 1)).reduceByKey(lambda a, b: a+b).collect():
-        print(" - " + str(item[1]), item[0])
-    print("Number of raw authors: ", authors.count())
-    print(" - " + str(authors.filter(lambda x: x['orcid'] != "").count()), "with orcid")
-    print(" - " + str(authors.filter(lambda x: x['wellformed'] is True).count()), "well formed")
-    print(" - " + str(authors.filter(lambda x: x['key'] != "").count()), "with key")
-    print(" - " + str(authors.map(lambda x: (x['orcid'], 1)).reduceByKey(lambda a, b: a+b).count()), "unique")
-    print("Number of blocks: ", authors.map(lambda x: (x['key'], 1)).reduceByKey(lambda a, b: a+b).count())
-
-    publications.map(lambda x: json.dumps(x, ensure_ascii=False)).saveAsTextFile(path="../../dataset/processed_pubmed_subgraph/publications", compressionCodecClass="org.apache.hadoop.io.compress.GzipCodec")
-    relations.map(lambda x: json.dumps(x, ensure_ascii=False)).saveAsTextFile(path="../../dataset/processed_pubmed_subgraph/relations", compressionCodecClass="org.apache.hadoop.io.compress.GzipCodec")
-    authors.map(lambda x: json.dumps(x, ensure_ascii=False)).saveAsTextFile(path="../../dataset/processed_pubmed_subgraph/authors", compressionCodecClass="org.apache.hadoop.io.compress.GzipCodec")
+    save_rdd(publications, "../../dataset/processed_pubmed_subgraph/publications")
+    save_rdd(relations, "../../dataset/processed_pubmed_subgraph/relations")
+    save_rdd(authors, "../../dataset/processed_pubmed_subgraph/authors")
 

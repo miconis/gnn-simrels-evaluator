@@ -386,3 +386,4 @@ $RECYCLE.BIN/
 src/log/*/*/*.pth
 dataset/
 !*.gitkeep
+src/examples/

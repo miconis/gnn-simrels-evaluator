@@ -387,3 +387,4 @@ src/log/*/*/*.pth
 dataset/
 !*.gitkeep
 src/examples/
+src/log

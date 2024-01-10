@@ -14,5 +14,5 @@ pip install -r requirements.txt
 ## Running
 ```bash
 cd src
-python main.py 
+python training_edge_scorer.py 
 ```

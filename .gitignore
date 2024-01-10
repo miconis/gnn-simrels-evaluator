@@ -384,7 +384,6 @@ $RECYCLE.BIN/
 
 .idea
 src/log/*/*/*.pth
-dataset/
+dataset/*
 !*.gitkeep
-src/examples/
-src/log
+src/log/*

@@ -57,7 +57,7 @@ def binary_cross_entropy_with_logits(pos_score, neg_score):
 def binary_cross_entropy(pos_score, neg_score):
     scores = torch.cat([pos_score, neg_score])
     labels = torch.cat(
-        [torch.zeros(pos_score.shape[0]), torch.ones(neg_score.shape[0])]
+        [torch.ones(pos_score.shape[0]), torch.zeros(neg_score.shape[0])]
     )
 
     return F.binary_cross_entropy(scores, labels.float())
@@ -237,3 +237,29 @@ def get_connected_group(src, seen, neighbors):
         nodes.update(n for n in neighbors[node] if n not in seen)
         result.append(node)
     return result, seen
+
+
+def conf_matrix_metrics(conf_matrix):
+    accuracy = (conf_matrix[1, 1] + conf_matrix[0, 0]) / (conf_matrix[0, 0] + conf_matrix[0, 1] + conf_matrix[1, 0] + conf_matrix[1, 1])
+    tpr = conf_matrix[1, 1] / (conf_matrix[1, 0] + conf_matrix[1, 1])  # recall
+    tnr = conf_matrix[0, 0] / (conf_matrix[0, 0] + conf_matrix[0, 1])
+    fnr = conf_matrix[1, 0] / (conf_matrix[1, 0] + conf_matrix[1, 1])
+    fpr = conf_matrix[0, 1] / (conf_matrix[0, 0] + conf_matrix[0, 1])
+    precision = conf_matrix[1, 1] / (conf_matrix[1, 1] + conf_matrix[0, 1])
+    balanced_accuracy = (tpr + tnr) / 2
+    f1_score = 2*conf_matrix[1, 1] / (2*conf_matrix[1, 1] + conf_matrix[0, 1] + conf_matrix[1, 0])
+    return f"Accuracy (A): {accuracy}\nBalanced Accuracy (BA): {balanced_accuracy}\nTrue Positive Rate (TPR) - Recall: {tpr}\nTrue Negative Rate (TNR): {tnr}\nFalse Negative Rate (FNR): {fnr}\nFalse Positive Rate (FPR): {fpr}\nPrecision: {precision}\nF1-Score: {f1_score}"
+
+
+def plot_confusion_matrix(conf_matrix):
+    conf_matrix = conf_matrix.numpy().tolist()
+    fig, ax = plt.subplots(figsize=(7.5, 7.5))
+    ax.matshow(conf_matrix, cmap=plt.cm.Blues, alpha=0.3)
+    for i in range(2):
+        for j in range(2):
+            ax.text(x=j, y=i, s=conf_matrix[i][j], va="center", ha="center")
+
+    plt.xlabel("Predicted", fontsize=18)
+    plt.ylabel("Label", fontsize=18)
+    plt.show()
+    return fig

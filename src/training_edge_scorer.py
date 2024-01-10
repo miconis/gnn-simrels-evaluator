@@ -15,7 +15,7 @@ random.seed(1234)
 np.random.seed(1234)
 os.environ["DGLBACKEND"] = "pytorch"
 min_valid_loss = np.inf
-best_embeddings_model_path = "./log/models/GraphSAGE/GraphSAGE-epoch188.ckpt.pth"
+best_model_path = "./log/models/GraphSAGE4WeightedMetapathMLPEdgeScorer/04-01-2024_19-34-03/GraphSAGE4WeightedMetapathMLPEdgeScorer-epoch400.ckpt.pth"
 load_saved_model = True
 current_date = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
 
@@ -32,49 +32,55 @@ potentially_equates_graph, colleague_graph, citation_graph, collaboration_graph 
 
 node_features = full_graph.ndata["feat"]["author"]
 
-embeddings_model = GS3LSTM(in_feats=768, h_feats=100, num_layers=2, dropout=0.2)
-predictor = EdgeScorer(n_feats=100)
-optimizer = torch.optim.Adam(itertools.chain(embeddings_model.parameters(), predictor.parameters()), lr=LEARNING_RATE)
-loss = binary_cross_entropy_with_logits
+model = GraphSAGE4WeightedMetapathMLPEdgeScorer(in_feats=768,
+                                                h_feats=100,
+                                                potentially_equates_graph=potentially_equates_graph,
+                                                colleague_graph=colleague_graph,
+                                                citation_graph=citation_graph,
+                                                collaboration_graph=collaboration_graph)
+optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+loss = binary_cross_entropy
 
 print("Starting training process")
-log_dir = f"./log/models/{embeddings_model.__class__.__name__}/"
+log_dir = f"./log/models/{model.__class__.__name__}/"
 train_writer = SummaryWriter(log_dir=f"{log_dir}{current_date}/training")
 test_writer = SummaryWriter(log_dir=f"{log_dir}{current_date}/testing")
 # start server (in gnn-entity-blocking directory): tensorboard --logdir ./log
+
+# uncomment when resume training
+# load_checkpoint(model, optimizer, best_model_path)
+# min_valid_loss = 0.3014
+
 counter = EARLY_STOPPING
 for e in range(1, EPOCHS+1):
-    embeddings_model.train()
-    predictor.train()
-    node_embeddings = embeddings_model(potentially_equates_graph, colleague_graph, citation_graph, collaboration_graph, node_features)
+    model.train()
+    pos_score = model(train_pos_graph, node_features)
+    neg_score = model(train_neg_graph, node_features)
 
-    pos_score = predictor(train_pos_graph, node_embeddings)
-    neg_score = predictor(train_neg_graph, node_embeddings)
-
-    train_acc = compute_acc(pos_score, neg_score)
-    train_loss = loss(pos_score, neg_score)
+    train_acc = model.compute_accuracy(pos_score, neg_score)
+    train_loss = model.compute_loss(pos_score, neg_score)
     train_writer.add_scalar("Loss", train_loss, e)
     train_writer.add_scalar("Accuracy", train_acc, e)
     optimizer.zero_grad()
     train_loss.backward()
     optimizer.step()
 
-    embeddings_model.eval()
-    predictor.eval()
+    model.eval()
     with torch.no_grad():
-        test_pos_score = predictor(test_pos_graph, node_embeddings)
-        test_neg_score = predictor(test_neg_graph, node_embeddings)
-        test_loss = loss(test_pos_score, test_neg_score)
-        test_acc = compute_acc(test_pos_score, test_neg_score)
+        test_pos_score = model(test_pos_graph, node_features)
+        test_neg_score = model(test_neg_graph, node_features)
+
+        test_loss = model.compute_loss(test_pos_score, test_neg_score)
+        test_acc = model.compute_accuracy(test_pos_score, test_neg_score)
         test_writer.add_scalar("Loss", test_loss, e)
         test_writer.add_scalar("Accuracy", test_acc, e)
-        print(f"In epoch {e:03d} - loss: {train_loss:.4f} - train acc: {train_acc:.4f} - test loss: {test_loss:.4f} - test acc: {test_acc:.4f}")
+        print(f"In epoch {e:03d} - train loss: {train_loss:.4f} - train acc: {train_acc:.4f} - test loss: {test_loss:.4f} - test acc: {test_acc:.4f}")
 
     if min_valid_loss >= test_loss:
         counter = EARLY_STOPPING
         min_valid_loss = test_loss
-        best_embeddings_model = copy.deepcopy(embeddings_model)
-        best_embeddings_model_path = save_checkpoint(embeddings_model, optimizer, e, log_dir)
+        best_model = copy.deepcopy(model)
+        best_model_path = save_checkpoint(model, optimizer, e, log_dir)
     counter -= 1
     if counter <= 0:
         print("Early stopping!")

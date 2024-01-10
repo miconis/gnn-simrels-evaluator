@@ -302,6 +302,10 @@ class PubmedSubgraph(DGLDataset):
         self.label_block_size_mask = torch.load(self.save_dir + "/label_block_size_mask.pt")
         self.key_block_size_mask = torch.load(self.save_dir + "/key_block_size_mask.pt")
 
+
+    def get_clean_keys(self):
+        return self.keys.long()
+
     def has_cache(self):
         """
         Check whether there are processed data

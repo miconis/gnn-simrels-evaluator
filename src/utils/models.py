@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from dgl.nn.pytorch.conv import SAGEConv
 import dgl.function as fn
 
+torch.manual_seed(42)
 
 # EDGE PREDICTORS
 class DotPredictor(nn.Module):
@@ -13,7 +14,6 @@ class DotPredictor(nn.Module):
             g.ndata["h"] = h
             g.apply_edges(fn.u_dot_v("h", "h", "score"))
             return g.edata["score"][:, 0]
-
 
 class EuclideanPredictor(nn.Module):
     def euclidean_distance(self, edges):
@@ -24,15 +24,17 @@ class EuclideanPredictor(nn.Module):
         g.apply_edges(self.euclidean_distance)
         return g.edata["score"]
 
-
 class EdgeScorer(nn.Module):
-    def __init__(self, n_feats):
+    def __init__(self, n_feats, h_feats):
         super(EdgeScorer, self).__init__()
-        self.linear1 = nn.Linear(n_feats * 2, 1)
+        self.linear1 = nn.Linear(n_feats * 2, h_feats)
+        self.linear2 = nn.Linear(h_feats, 1)
 
     def apply_edges(self, edges):
         h = torch.cat([edges.src["h"], edges.dst["h"]], 1)
         h = self.linear1(h)
+        h = F.relu(h)
+        h = self.linear2(h)
         return {"score": F.sigmoid(h).squeeze(1)}
 
     def forward(self, g, h):
@@ -55,97 +57,209 @@ class GraphSAGE(nn.Module):
         h = self.conv2(g, h)
         return h
 
+# GRAPH BLOCKING
+class GraphSAGELinearSimple(nn.Module):
+    def __init__(self, in_feats, h_feats, n_clusters):
+        super(GraphSAGELinearSimple, self).__init__()
+        self.sage = GraphSAGE(in_feats=in_feats, h_feats=h_feats)
+
+        self.predictor = nn.Linear(in_features=h_feats, out_features=n_clusters)
+
+    def forward(self, g, in_feat):
+        pass
+
 
 # METAPATH AGGREGATION
 class MetapathAttention(nn.Module):
-    def __init__(self, m_feats):
+    def __init__(self, in_feats):
         super(MetapathAttention, self).__init__()
-        self.linear1 = nn.Linear(in_features=m_feats, out_features=1)
-        self.linear2 = nn.Linear(in_features=m_feats, out_features=1)
-        self.linear3 = nn.Linear(in_features=m_feats, out_features=1)
-        self.linear4 = nn.Linear(in_features=m_feats, out_features=1)
-        self.softmax = nn.Softmax(dim=1)
+        self.linear1 = nn.Linear(in_features=in_feats, out_features=1)
+        self.linear2 = nn.Linear(in_features=in_feats, out_features=1)
+        self.linear3 = nn.Linear(in_features=in_feats, out_features=1)
+        self.linear4 = nn.Linear(in_features=in_feats, out_features=1)
+        self.softmax = nn.Softmax(dim=0)
 
     def forward(self, node_embeddings1, node_embeddings2, node_embeddings3, node_embeddings4):
         l1 = self.linear1(node_embeddings1)
         l2 = self.linear2(node_embeddings2)
         l3 = self.linear3(node_embeddings3)
         l4 = self.linear4(node_embeddings4)
-        return self.softmax(torch.cat((l1, l2, l3, l4), dim=1))
+        return self.softmax(torch.stack((l1, l2, l3, l4), dim=0))
 
 
-class MetapathGating(nn.Module):
-    def __init__(self):
-        super(MetapathGating, self).__init__()
-        self.glu1 = nn.GLU()
-        self.glu2 = nn.GLU()
-        self.glu3 = nn.GLU()
-        self.glu4 = nn.GLU()
+# SIMREL SCORER
+class GraphSAGE4MLPEdgeScorer(nn.Module):
+    def __init__(self, in_feats, h_feats, potentially_equates_graph, colleague_graph, citation_graph, collaboration_graph):
+        super(GraphSAGE4MLPEdgeScorer, self).__init__()
 
-    def forward(self, node_embeddings1, node_embeddings2, node_embeddings3, node_embeddings4):
-        g1 = self.glu1(node_embeddings1)
-        g2 = self.glu2(node_embeddings2)
-        g3 = self.glu3(node_embeddings3)
-        g4 = self.glu4(node_embeddings4)
-        return g1, g2, g3, g4
+        #graphs
+        self.potentially_equates_graph = potentially_equates_graph
+        self.colleague_graph = colleague_graph
+        self.citation_graph = citation_graph
+        self.collaboration_graph = collaboration_graph
 
-
-class MetapathAggregation(nn.Module):
-    def __init__(self, m_feats):
-        super(MetapathAggregation, self).__init__()
-        self.gating = MetapathGating()
-        self.attention = MetapathAttention(m_feats)
-
-    def forward(self, node_embeddings1, node_embeddings2, node_embeddings3, node_embeddings4):
-        g1, g2, g3, g4 = self.gating(node_embeddings1, node_embeddings2, node_embeddings3, node_embeddings4)
-        weigths = self.attention(node_embeddings1, node_embeddings2, node_embeddings3, node_embeddings4)
-        return (torch.mul(g1, weigths[:, 0].reshape(-1, 1)) +
-                torch.mul(g2, weigths[:, 1].reshape(-1, 1)) +
-                torch.mul(g3, weigths[:, 2].reshape(-1, 1)) +
-                torch.mul(g4, weigths[:, 3].reshape(-1, 1)))
-
-
-class GS3Agg(nn.Module):
-    def __init__(self, in_feats, h_feats):
-        super(GS3Agg, self).__init__()
+        # node embedding layers
         self.sage1 = GraphSAGE(in_feats=in_feats, h_feats=h_feats)
         self.sage2 = GraphSAGE(in_feats=in_feats, h_feats=h_feats)
         self.sage3 = GraphSAGE(in_feats=in_feats, h_feats=h_feats)
         self.sage4 = GraphSAGE(in_feats=in_feats, h_feats=h_feats)
 
-        self.metapath_aggregator = MetapathAggregation(m_feats=h_feats)
+        # edge classification layers
+        self.linear1 = nn.Linear(in_features=h_feats * 4 * 2, out_features=h_feats)
+        self.linear2 = nn.Linear(in_features=h_feats, out_features=1)
 
-    def forward(self, graph1, graph2, graph3, graph4, node_features):
-        h1 = self.sage1(graph1, node_features)
-        h2 = self.sage2(graph2, node_features)
-        h3 = self.sage3(graph3, node_features)
-        h4 = self.sage4(graph4, node_features)
+    def compute_loss(self, pos_scores, neg_scores):
+        scores = torch.cat([pos_scores, neg_scores])
+        labels = torch.cat(
+            [torch.ones(pos_scores.shape[0]), torch.zeros(neg_scores.shape[0])]
+        )
+        return F.binary_cross_entropy(scores, labels.float())
 
-        node_embeddings = self.metapath_aggregator(h1, h2, h3, h4)
+    def compute_accuracy(self, pos_scores, neg_scores):
+        scores = torch.cat([pos_scores, neg_scores]).detach()
+        labels = torch.cat([torch.ones(pos_scores.shape[0]), torch.zeros(neg_scores.shape[0])])
+        correct = (scores.round() == labels).sum().item()
+        return correct / scores.shape[0] * 100
 
+    def compute_node_embeddings(self, node_features):
+        h1 = self.sage1(self.potentially_equates_graph, node_features)
+        h2 = self.sage2(self.colleague_graph, node_features)
+        h3 = self.sage3(self.citation_graph, node_features)
+        h4 = self.sage4(self.collaboration_graph, node_features)
+
+        node_embeddings = torch.cat((h1, h2, h3, h4), dim=1)
         return node_embeddings
 
+    def mlp_edge_predictor(self, edges):
+        h = torch.cat([edges.src["h"], edges.dst["h"]], 1)
+        h = self.linear1(h)
+        h = F.relu(h)
+        h = self.linear2(h)
+        return {"score": F.sigmoid(h).squeeze(1)}
 
-class GS3LSTM(nn.Module):
-    def __init__(self, in_feats, h_feats, num_layers, dropout):
-        super(GS3LSTM, self).__init__()
-        self.dropout = dropout
+    def forward(self, simrels_graph, node_features):
+        with simrels_graph.local_scope():
+            simrels_graph.ndata["h"] = self.compute_node_embeddings(node_features)
+            simrels_graph.apply_edges(self.mlp_edge_predictor)
+            return simrels_graph.edata["score"]
+
+
+class GraphSAGE4MeanMLPEdgeScorer(nn.Module):
+    def __init__(self, in_feats, h_feats, potentially_equates_graph, colleague_graph, citation_graph, collaboration_graph):
+        super(GraphSAGE4MeanMLPEdgeScorer, self).__init__()
+
+        #graphs
+        self.potentially_equates_graph = potentially_equates_graph
+        self.colleague_graph = colleague_graph
+        self.citation_graph = citation_graph
+        self.collaboration_graph = collaboration_graph
+
+        # node embedding layers
         self.sage1 = GraphSAGE(in_feats=in_feats, h_feats=h_feats)
         self.sage2 = GraphSAGE(in_feats=in_feats, h_feats=h_feats)
         self.sage3 = GraphSAGE(in_feats=in_feats, h_feats=h_feats)
         self.sage4 = GraphSAGE(in_feats=in_feats, h_feats=h_feats)
 
-        self.lstm = nn.LSTM(input_size=h_feats, hidden_size=h_feats, num_layers=num_layers, batch_first=False)
+        # edge classification layers
+        self.linear1 = nn.Linear(in_features=h_feats * 2, out_features=h_feats)
+        self.linear2 = nn.Linear(in_features=h_feats, out_features=1)
 
-    def forward(self, graph1, graph2, graph3, graph4, node_features):
-        h1 = self.sage1(graph1, node_features)
-        h2 = self.sage2(graph2, node_features)
-        h3 = self.sage3(graph3, node_features)
-        h4 = self.sage4(graph4, node_features)
+    def compute_loss(self, pos_scores, neg_scores):
+        scores = torch.cat([pos_scores, neg_scores])
+        labels = torch.cat(
+            [torch.ones(pos_scores.shape[0]), torch.zeros(neg_scores.shape[0])]
+        )
+        return F.binary_cross_entropy(scores, labels.float())
 
-        hidden_global = torch.stack((h1,h2,h3,h4), dim=0)
+    def compute_accuracy(self, pos_scores, neg_scores):
+        scores = torch.cat([pos_scores, neg_scores]).detach()
+        labels = torch.cat([torch.ones(pos_scores.shape[0]), torch.zeros(neg_scores.shape[0])])
+        correct = (scores.round() == labels).sum().item()
+        return correct / scores.shape[0] * 100
 
-        hidden_global, (last_hidden_lstm, _) = self.lstm(hidden_global)
-        node_embeddings = F.dropout(last_hidden_lstm[-1, :, :], p=self.dropout, training=self.training)
+    def compute_node_embeddings(self, node_features):
+        h1 = self.sage1(self.potentially_equates_graph, node_features)
+        h2 = self.sage2(self.colleague_graph, node_features)
+        h3 = self.sage3(self.citation_graph, node_features)
+        h4 = self.sage4(self.collaboration_graph, node_features)
 
+        node_embeddings_stack = torch.stack((h1, h2, h3, h4), dim=0)
+
+        node_embeddings = torch.mean(node_embeddings_stack, dim=0)
         return node_embeddings
+
+    def mlp_edge_predictor(self, edges):
+        h = torch.cat([edges.src["h"], edges.dst["h"]], 1)
+        h = self.linear1(h)
+        h = F.relu(h)
+        h = self.linear2(h)
+        return {"score": F.sigmoid(h).squeeze(1)}
+
+    def forward(self, simrels_graph, node_features):
+        with simrels_graph.local_scope():
+            simrels_graph.ndata["h"] = self.compute_node_embeddings(node_features)
+            simrels_graph.apply_edges(self.mlp_edge_predictor)
+            return simrels_graph.edata["score"]
+
+
+class GraphSAGE4WeightedMetapathMLPEdgeScorer(nn.Module):
+    def __init__(self, in_feats, h_feats, potentially_equates_graph, colleague_graph, citation_graph, collaboration_graph):
+        super(GraphSAGE4WeightedMetapathMLPEdgeScorer, self).__init__()
+
+        #graphs
+        self.potentially_equates_graph = potentially_equates_graph
+        self.colleague_graph = colleague_graph
+        self.citation_graph = citation_graph
+        self.collaboration_graph = collaboration_graph
+
+        # node embedding layers
+        self.sage1 = GraphSAGE(in_feats=in_feats, h_feats=h_feats)
+        self.sage2 = GraphSAGE(in_feats=in_feats, h_feats=h_feats)
+        self.sage3 = GraphSAGE(in_feats=in_feats, h_feats=h_feats)
+        self.sage4 = GraphSAGE(in_feats=in_feats, h_feats=h_feats)
+
+        # metapath attention
+        self.metapath_attention = MetapathAttention(in_feats=h_feats)
+
+        # edge classification layers
+        self.linear1 = nn.Linear(in_features=h_feats * 2, out_features=h_feats)
+        self.linear2 = nn.Linear(in_features=h_feats, out_features=1)
+
+    def compute_loss(self, pos_scores, neg_scores):
+        scores = torch.cat([pos_scores, neg_scores])
+        labels = torch.cat(
+            [torch.ones(pos_scores.shape[0]), torch.zeros(neg_scores.shape[0])]
+        )
+        return F.binary_cross_entropy(scores, labels.float())
+
+    def compute_accuracy(self, pos_scores, neg_scores):
+        scores = torch.cat([pos_scores, neg_scores]).detach()
+        labels = torch.cat([torch.ones(pos_scores.shape[0]), torch.zeros(neg_scores.shape[0])])
+        correct = (scores.round() == labels).sum().item()
+        return correct / scores.shape[0] * 100
+
+    def compute_node_embeddings(self, node_features):
+        h1 = self.sage1(self.potentially_equates_graph, node_features)
+        h2 = self.sage2(self.colleague_graph, node_features)
+        h3 = self.sage3(self.citation_graph, node_features)
+        h4 = self.sage4(self.collaboration_graph, node_features)
+
+        weights = self.metapath_attention(h1, h2, h3, h4)
+        node_embeddings_stack = torch.stack((h1, h2, h3, h4), dim=0)
+        node_embeddings_stack = node_embeddings_stack * weights
+
+        node_embeddings = torch.sum(node_embeddings_stack, dim=0)
+        return node_embeddings
+
+    def mlp_edge_predictor(self, edges):
+        h = torch.cat([edges.src["h"], edges.dst["h"]], 1)
+        h = self.linear1(h)
+        h = F.relu(h)
+        h = self.linear2(h)
+        return {"score": F.sigmoid(h).squeeze(1)}
+
+    def forward(self, simrels_graph, node_features):
+        with simrels_graph.local_scope():
+            simrels_graph.ndata["h"] = self.compute_node_embeddings(node_features)
+            simrels_graph.apply_edges(self.mlp_edge_predictor)
+            return simrels_graph.edata["score"]

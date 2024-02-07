@@ -16,14 +16,12 @@ np.random.seed(1234)
 
 class PubmedSubgraph(DGLDataset):
     """
-    Dataset for Graph Blocking.
+    Dataset for Similarity Relationships Evaluation.
 
     Parameters
     ----------
     dataset_name : name of the dataset
     subgraph_base_path : path to download the base subgraph
-    pos_etype : edge type of positive edges for link prediction
-    neg_etype : edge type of edges to be used to compute negative graph
     url : URL to download the raw dataset
     raw_dir : directory that will store (or already stores) the downloaded data
     save_dir : directory to save preprocessed data
@@ -33,7 +31,6 @@ class PubmedSubgraph(DGLDataset):
     def __init__(self,
                  dataset_name,
                  subgraph_base_path,
-                 neg_etype,
                  url=None,
                  raw_dir=None,
                  save_dir=None,
@@ -52,15 +49,7 @@ class PubmedSubgraph(DGLDataset):
 
         self.subgraph_base_path = subgraph_base_path
 
-        self.neg_etype = neg_etype
-
         self.graph = None
-        self.negative_edges = None
-        self.wellformed_mask = None
-        self.key_block_size_mask = None
-        self.label_block_size_mask = None
-        self.labels = None
-        self.keys = None
 
         super().__init__(name=dataset_name,
                          url=url,
@@ -78,7 +67,9 @@ class PubmedSubgraph(DGLDataset):
     def download(self):
         """
         Download the raw data to local disk (create single files to be processed)
+        -- to be replaced with the download from Zenodo.org repository: https://zenodo.org/records/10593022
         """
+        pass
         print("Downloading data!")
 
         if len(os.listdir(self.raw_dir)) <= 1:
@@ -210,7 +201,6 @@ class PubmedSubgraph(DGLDataset):
         similarity_rels = similarity_rels.map(lambda x: [x[1][0], x[1][1]])
         similarity_rels_tensor = torch.LongTensor(similarity_rels.collect())
 
-
         self.graph = dgl.heterograph(
             data_dict={
                 ("publication", "cites", "publication"): (cites_rels_tensor[:, 0], cites_rels_tensor[:, 1]),
@@ -233,48 +223,11 @@ class PubmedSubgraph(DGLDataset):
             "author": authors_tensor
         }
 
-        self.negative_edges = self.generate_negative_edges(etype=self.neg_etype)
-        self.keys = self.generate_keys(authors=authors)
-        self.wellformed_mask = self.generate_wellformed_mask(authors=authors)
-        self.singleton_label_mask = self.generate_label_block_size_mask(authors=authors)
-        self.singleton_key_mask = self.generate_key_block_size_mask(authors=authors)
-        self.labels = self.generate_labels(authors=authors)
-
     def get_graph(self):
         """
         Returns the Graph
         """
         return self.graph
-
-    def get_wellformed_mask(self):
-        """
-        Returns the wellformed mask
-        """
-        return self.wellformed_mask
-
-    def get_key_block_size_mask(self):
-        """
-        Returns the singleton mask
-        """
-        return self.key_block_size_mask
-
-    def get_labels_block_size_mask(self):
-        """
-        Returns the singleton mask
-        """
-        return self.label_block_size_mask
-
-    def get_labels(self):
-        """
-        Return labels for authors
-        """
-        return self.labels
-
-    def get_keys(self):
-        """
-        Return keys for authors
-        """
-        return self.keys
 
     def save(self):
         """
@@ -282,12 +235,6 @@ class PubmedSubgraph(DGLDataset):
         """
         print("Saving graph on disk")
         save_graphs(self.save_dir + "/pubmed_graph.dgl", [self.graph])
-        torch.save(self.negative_edges, self.save_dir + "/negative_edges.pt")
-        torch.save(self.keys, self.save_dir + "/author_clean_keys.pt")
-        torch.save(self.wellformed_mask, self.save_dir + "/wellformed_mask.pt")
-        torch.save(self.labels, self.save_dir + "/author_labels.pt")
-        torch.save(self.label_block_size_mask, self.save_dir + "/label_block_size_mask.pt")
-        torch.save(self.key_block_size_mask, self.save_dir + "/key_block_size_mask.pt")
 
     def load(self):
         """
@@ -295,111 +242,12 @@ class PubmedSubgraph(DGLDataset):
         """
         print("Load graph from disk")
         self.graph = load_graphs(self.save_dir + "/pubmed_graph.dgl")[0]
-        self.negative_edges = torch.load(self.save_dir + "/negative_edges.pt")
-        self.keys = torch.load(self.save_dir + "/author_clean_keys.pt")
-        self.wellformed_mask = torch.load(self.save_dir + "/wellformed_mask.pt")
-        self.labels = torch.load(self.save_dir + "/author_labels.pt")
-        self.label_block_size_mask = torch.load(self.save_dir + "/label_block_size_mask.pt")
-        self.key_block_size_mask = torch.load(self.save_dir + "/key_block_size_mask.pt")
-
-
-    def get_clean_keys(self):
-        return self.keys.long()
 
     def has_cache(self):
         """
         Check whether there are processed data
         """
         return os.path.exists(self.save_dir + "/pubmed_graph.dgl")
-
-    def generate_negative_edges(self, etype):
-        """
-        Generates negative edges of the given type
-        Parameters:
-            - pos_etype: positive edges
-            - neg_etype: edges to be used to compute negative graph
-        """
-        print("Generating negative edges")
-        n_edges = self.graph.number_of_edges(etype=etype)  # to generate the same number of negative edges
-
-        # create negative edges
-        base_graph = dgl.edge_type_subgraph(self.graph, etypes=[etype])
-        neg_src_list = []
-        neg_dst_list = []
-        count = 0
-        while count < n_edges:
-            src_id, dst_id = random.randint(0, base_graph.num_nodes() - 1), random.randint(0, base_graph.num_nodes() - 1)
-            if not base_graph.has_edges_between(src_id, dst_id):
-                neg_src_list.append(src_id)
-                neg_dst_list.append(dst_id)
-                count += 1
-
-        neg_src = torch.LongTensor(neg_src_list)
-        neg_dst = torch.LongTensor(neg_dst_list)
-
-        return torch.stack((neg_src, neg_dst), 0)
-
-    def generate_keys(self, authors):
-        """
-        Generate keys for groups
-        Parameters:
-            - the author RDD in the form (JSON, index)
-        """
-        keys_list = authors.map(lambda x: x[0]['key']).distinct().collect()  # used to convert the label name to numbers
-        keys = authors.map(lambda x: x[0]['key']).map(lambda x: keys_list.index(x))
-        keys_tensor = torch.IntTensor(keys.collect())
-
-        return keys_tensor
-
-    def generate_labels(self, authors):
-        """
-        Generate labels for groups
-        Parameters:
-            - the author RDD in the form (JSON, index)
-        """
-        print("Generating keys")
-        labels_list = authors.map(lambda x: x[0]['orcid']).distinct().collect()  # used to convert the orcids to numbers
-        labels = authors.map(lambda x: x[0]['orcid']).map(lambda x: labels_list.index(x))
-        labels_tensor = torch.IntTensor(labels.collect())
-
-        return labels_tensor
-
-    def generate_wellformed_mask(self, authors):
-        """
-        Generate wellformed mask
-        Parameters:
-            - the author RDD in the form (JSON, index)
-        """
-        print("Generating wellformed mask")
-        wellformed_mask_tensor = torch.IntTensor(authors.map(lambda x: x[0]['wellformed']).map(lambda x: 1 if x==True else 0).collect())
-
-        return wellformed_mask_tensor
-
-    def generate_label_block_size_mask(self, authors):
-        """
-        Generate mask to count number of same labels
-        Parameters:
-            - the author RDD in the form (JSON, index)
-        """
-        print("Generating singleton mask")
-        block_size = authors.map(lambda x: (x[0]['orcid'], 1)).reduceByKey(lambda a,b: a+b)
-
-        size_mask_tensor = torch.IntTensor(authors.map(lambda x: (x[0]['orcid'], x[1])).leftOuterJoin(block_size).map(lambda x: (x[1][0], x[1][1])).sortByKey(ascending=True).map(lambda x: 0 if x[1]==None else x[1]).collect())
-
-        return size_mask_tensor
-
-    def generate_key_block_size_mask(self, authors):
-        """
-        Generate mask to count number of same keys
-        Parameters:
-            - the author RDD in the form (JSON, index)
-        """
-        print("Generating singleton mask")
-        block_size = authors.map(lambda x: (x[0]['key'], 1)).reduceByKey(lambda a,b: a+b)
-
-        size_mask_tensor = torch.IntTensor(authors.map(lambda x: (x[0]['key'], x[1])).leftOuterJoin(block_size).map(lambda x: (x[1][0], x[1][1])).sortByKey(ascending=True).map(lambda x: 0 if x[1]==None else x[1]).collect())
-
-        return size_mask_tensor
 
     def get_node_embeddings_graphs(self):
         """
@@ -412,61 +260,17 @@ class PubmedSubgraph(DGLDataset):
 
         return dgl.add_self_loop(potentially_equates_graph), dgl.add_self_loop(colleague_graph), dgl.add_self_loop(citation_graph), dgl.add_self_loop(collaboration_graph)
 
-    def get_link_prediction_graphs(self, pos_etype, train_ratio):
-        """
-        Returns splittings for training and testing
-        """
-        n_edges = self.graph[0].number_of_edges(etype=pos_etype)
-        n_nodes = self.graph[0].edge_type_subgraph(etypes=[pos_etype]).num_nodes()
-        train_size = int(train_ratio * n_edges)
-        # random permutation to split nodes randomly
-        eids = np.arange(n_edges)
-        eids = np.random.permutation(eids)
-
-        # positive edges
-        pos_src, pos_dst = self.graph[0].edges(etype=pos_etype)
-        train_src, train_dst = pos_src[eids[:train_size]], pos_dst[eids[:train_size]]
-        test_src, test_dst = pos_src[eids[train_size:]], pos_dst[eids[train_size:]]
-
-        # negative edges
-        neg_src, neg_dst = self.negative_edges[0], self.negative_edges[1]
-        train_neg_src, train_neg_dst = neg_src[eids[:train_size]], neg_dst[eids[:train_size]]
-        test_neg_src, test_neg_dst = neg_src[eids[train_size:]], neg_dst[eids[train_size:]]
-
-        # create graphs
-        train_pos_graph = dgl.graph((train_src, train_dst), num_nodes=n_nodes)
-        test_pos_graph = dgl.graph((test_src, test_dst), num_nodes=n_nodes)
-        train_neg_graph = dgl.graph((train_neg_src, train_neg_dst), num_nodes=n_nodes)
-        test_neg_graph = dgl.graph((test_neg_src, test_neg_dst), num_nodes=n_nodes)
-
-        return train_pos_graph, train_neg_graph, test_pos_graph, test_neg_graph
-
-    def get_random_regularization_graph(self, n_reg_edges, etype):
-        """
-        Returns the random regularization graph based on the given etype
-        Parameters:
-            - n_reg_edges: number of edges to be created
-            - etype: type of edge to be used
-        """
-        reg_src, reg_dst = self.graph[0].edges(etype=etype)
-        n_edges = self.graph[0].number_of_edges(etype=etype)
-        n_nodes = self.graph[0].edge_type_subgraph(etypes=[etype]).num_nodes()
-
-        # random permutation
-        eids = np.arange(n_edges)
-        eids = np.random.permutation(eids)
-
-        regularization_graph = dgl.graph((reg_src[eids][0:n_reg_edges], reg_dst[eids][0:n_reg_edges]), num_nodes=n_nodes)
-
-        return regularization_graph
-
     def get_simrels_graph(self):
         return dgl.edge_type_subgraph(self.graph[0], ['similar'])
 
-    def get_simrel_splittings(self, train_ratio):
+    def get_simrel_splittings(self, ratios):
         """
-        Returns splittings for training and testing
+        Returns splittings for training, validation and testing
         """
+        train_ratio = ratios[0]
+        valid_ratio = ratios[1]
+        test_ratio = ratios[2]
+
         n_edges = self.graph[0].number_of_edges(etype="similar")
         n_nodes = self.graph[0].edge_type_subgraph(etypes=["similar"]).num_nodes()
 
@@ -478,25 +282,33 @@ class PubmedSubgraph(DGLDataset):
 
         n_pos_edges = correct_simrel_mask.sum()
         n_neg_edges = n_edges - n_pos_edges
-        n_train_pos = int(train_ratio * n_pos_edges)
-        n_train_neg = int(train_ratio * n_neg_edges)
+        min_edges = min(n_pos_edges, n_neg_edges)
 
-        # positive edges
-        train_src, train_dst = sim_src[positive_index][:n_train_pos], sim_dst[positive_index][:n_train_pos]
-        test_src, test_dst = sim_src[positive_index][n_train_pos:], sim_dst[positive_index][n_train_pos:]
+        pos_src = sim_src[positive_index][:min_edges]
+        pos_dst = sim_dst[positive_index][:min_edges]
+        neg_src = sim_src[negative_index][:min_edges]
+        neg_dst = sim_dst[negative_index][:min_edges]
 
-        # negative edges
-        train_neg_src, train_neg_dst = sim_src[negative_index][:n_train_neg], sim_dst[negative_index][:n_train_neg]
-        test_neg_src, test_neg_dst = sim_src[negative_index][n_train_neg:], sim_dst[negative_index][n_train_neg:]
+        # POSITIVE EDGES
+        train_pos_src, train_pos_dst = pos_src[:int(train_ratio*min_edges)], pos_dst[:int(train_ratio*min_edges)]
+        valid_pos_src, valid_pos_dst = pos_src[int(train_ratio*min_edges):int((train_ratio+valid_ratio)*min_edges)], pos_dst[int(train_ratio*min_edges):int((train_ratio*valid_ratio)*min_edges)]
+        test_pos_src, test_pos_dst = pos_src[int((train_ratio+valid_ratio)*min_edges):], pos_dst[int((train_ratio+valid_ratio)*min_edges):]
+
+        # NEGATIVE EDGES
+        train_neg_src, train_neg_dst = neg_src[:int(train_ratio*min_edges)], neg_dst[:int(train_ratio*min_edges)]
+        valid_neg_src, valid_neg_dst = neg_src[int(train_ratio*min_edges):int((train_ratio+valid_ratio)*min_edges)], neg_dst[int(train_ratio*min_edges):int((train_ratio*valid_ratio)*min_edges)]
+        test_neg_src, test_neg_dst = neg_src[int((train_ratio+valid_ratio)*min_edges):], neg_dst[int((train_ratio+valid_ratio)*min_edges):]
 
         # create graphs
-        train_pos_graph = dgl.graph((train_src, train_dst), num_nodes=n_nodes)
-        test_pos_graph = dgl.graph((test_src, test_dst), num_nodes=n_nodes)
+        train_pos_graph = dgl.graph((train_pos_src, train_pos_dst), num_nodes=n_nodes)
+        valid_pos_graph = dgl.graph((valid_pos_src, valid_pos_dst), num_nodes=n_nodes)
+        test_pos_graph = dgl.graph((test_pos_src, test_pos_dst), num_nodes=n_nodes)
+
         train_neg_graph = dgl.graph((train_neg_src, train_neg_dst), num_nodes=n_nodes)
+        valid_neg_graph = dgl.graph((valid_neg_src, valid_neg_dst), num_nodes=n_nodes)
         test_neg_graph = dgl.graph((test_neg_src, test_neg_dst), num_nodes=n_nodes)
 
-        return train_pos_graph, train_neg_graph, test_pos_graph, test_neg_graph
+        return train_pos_graph, train_neg_graph, valid_pos_graph, valid_neg_graph, test_pos_graph, test_neg_graph
 
     def get_orcids_graph(self):
         return dgl.edge_type_subgraph(self.graph[0], ['equates'])
-

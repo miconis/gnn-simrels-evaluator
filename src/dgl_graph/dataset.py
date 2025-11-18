@@ -263,14 +263,10 @@ class PubmedSubgraph(DGLDataset):
     def get_simrels_graph(self):
         return dgl.edge_type_subgraph(self.graph[0], ['similar'])
 
-    def get_simrel_splittings(self, ratios):
+    def get_simrel_splittings(self, train_ratio=0.6, valid_ratio=0.2, test_ratio=0.2):
         """
         Returns splittings for training, validation and testing
         """
-        train_ratio = ratios[0]
-        valid_ratio = ratios[1]
-        test_ratio = ratios[2]
-
         n_edges = self.graph[0].number_of_edges(etype="similar")
         n_nodes = self.graph[0].edge_type_subgraph(etypes=["similar"]).num_nodes()
 
@@ -291,12 +287,12 @@ class PubmedSubgraph(DGLDataset):
 
         # POSITIVE EDGES
         train_pos_src, train_pos_dst = pos_src[:int(train_ratio*min_edges)], pos_dst[:int(train_ratio*min_edges)]
-        valid_pos_src, valid_pos_dst = pos_src[int(train_ratio*min_edges):int((train_ratio+valid_ratio)*min_edges)], pos_dst[int(train_ratio*min_edges):int((train_ratio*valid_ratio)*min_edges)]
+        valid_pos_src, valid_pos_dst = pos_src[int(train_ratio*min_edges):int((train_ratio+valid_ratio)*min_edges)], pos_dst[int(train_ratio*min_edges):int((train_ratio+valid_ratio)*min_edges)]
         test_pos_src, test_pos_dst = pos_src[int((train_ratio+valid_ratio)*min_edges):], pos_dst[int((train_ratio+valid_ratio)*min_edges):]
 
         # NEGATIVE EDGES
         train_neg_src, train_neg_dst = neg_src[:int(train_ratio*min_edges)], neg_dst[:int(train_ratio*min_edges)]
-        valid_neg_src, valid_neg_dst = neg_src[int(train_ratio*min_edges):int((train_ratio+valid_ratio)*min_edges)], neg_dst[int(train_ratio*min_edges):int((train_ratio*valid_ratio)*min_edges)]
+        valid_neg_src, valid_neg_dst = neg_src[int(train_ratio*min_edges):int((train_ratio+valid_ratio)*min_edges)], neg_dst[int(train_ratio*min_edges):int((train_ratio+valid_ratio)*min_edges)]
         test_neg_src, test_neg_dst = neg_src[int((train_ratio+valid_ratio)*min_edges):], neg_dst[int((train_ratio+valid_ratio)*min_edges):]
 
         # create graphs

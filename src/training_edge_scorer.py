@@ -31,21 +31,30 @@ full_graph = dataset.get_graph()[0]
  valid_pos_graph,
  valid_neg_graph,
  test_pos_graph,
- test_neg_graph) = dataset.get_simrel_splittings(ratios=RATIOS)
+ test_neg_graph) = dataset.get_simrel_splittings(train_ratio=TRAIN_RATIO, valid_ratio=VALID_RATIO, test_ratio=TEST_RATIO)
+print("SIMILARITY RELATIONSHIPS")
+print(f"Train - pos: {train_pos_graph.num_edges()}, neg: {train_neg_graph.num_edges()}")
+print(f"Validation - pos: {valid_pos_graph.num_edges()}, neg: {valid_neg_graph.num_edges()}")
+print(f"Test - pos: {test_pos_graph.num_edges()}, neg: {test_pos_graph.num_edges()}")
 
 (potentially_equates_graph,
  colleague_graph,
  citation_graph,
  collaboration_graph) = dataset.get_node_embeddings_graphs()
+print("NODE EMBEDDINGS GRAPHS")
+print("Potentially equates", potentially_equates_graph)
+print("Colleague", colleague_graph)
+print("Citation", citation_graph)
+print("Collaboration", collaboration_graph)
 
 node_features = full_graph.ndata["feat"]["author"]
 
-model = GraphSAGE4WeightedMetapathMLPEdgeScorer(in_feats=768,
-                                                h_feats=100,
-                                                potentially_equates_graph=potentially_equates_graph,
-                                                colleague_graph=colleague_graph,
-                                                citation_graph=citation_graph,
-                                                collaboration_graph=collaboration_graph)
+model = AttentiveGraphSAGE4(in_feats=768,
+                            h_feats=100,
+                            potentially_equates_graph=potentially_equates_graph,
+                            colleague_graph=colleague_graph,
+                            citation_graph=citation_graph,
+                            collaboration_graph=collaboration_graph)
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 loss = binary_cross_entropy
 

@@ -6,7 +6,6 @@ from dgl.nn.pytorch.conv import SAGEConv
 
 torch.manual_seed(42)
 
-
 # NODE EMBEDDINGS
 class GraphSAGE(nn.Module):
     def __init__(self, in_feats, h_feats):
@@ -19,7 +18,6 @@ class GraphSAGE(nn.Module):
         h = F.relu(h)
         h = self.conv2(g, h)
         return h
-
 
 # METAPATH AGGREGATION
 class MetapathAttention(nn.Module):
@@ -38,10 +36,9 @@ class MetapathAttention(nn.Module):
         l4 = self.linear4(node_embeddings4)
         return self.softmax(torch.stack((l1, l2, l3, l4), dim=0))
 
-
-class GraphSAGE4WeightedMetapathMLPEdgeScorer(nn.Module):
+class AttentiveGraphSAGE4(nn.Module):
     def __init__(self, in_feats, h_feats, potentially_equates_graph, colleague_graph, citation_graph, collaboration_graph):
-        super(GraphSAGE4WeightedMetapathMLPEdgeScorer, self).__init__()
+        super(AttentiveGraphSAGE4, self).__init__()
 
         #graphs
         self.potentially_equates_graph = potentially_equates_graph

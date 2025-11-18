@@ -39,12 +39,12 @@ print("Wrong: ", correct_simrel_mask.shape[0] - correct_simrel_mask.sum().item()
 potentially_equates_graph, colleague_graph, citation_graph, collaboration_graph = dataset.get_node_embeddings_graphs()
 node_features = full_graph.ndata["feat"]["author"]
 
-model = GraphSAGE4WeightedMetapathMLPEdgeScorer(in_feats=768,
-                                                h_feats=100,
-                                                potentially_equates_graph=potentially_equates_graph,
-                                                colleague_graph=colleague_graph,
-                                                citation_graph=citation_graph,
-                                                collaboration_graph=collaboration_graph)
+model = AttentiveGraphSAGE4(in_feats=768,
+                            h_feats=100,
+                            potentially_equates_graph=potentially_equates_graph,
+                            colleague_graph=colleague_graph,
+                            citation_graph=citation_graph,
+                            collaboration_graph=collaboration_graph)
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
 load_checkpoint(model, optimizer, model_path)

@@ -16,7 +16,7 @@ random.seed(SEED)
 np.random.seed(SEED)
 os.environ["DGLBACKEND"] = "pytorch"
 min_valid_loss = np.inf
-best_model_path = BEST_MODEL_PATH
+best_model_path = None  # set when want to resume training
 load_saved_model = True
 current_date = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
 

@@ -1,13 +1,13 @@
-from datetime import datetime
 import random
-from src.dgl_graph.dataset import PubmedSubgraph
-from src.utils.utility import *
 import warnings
-from src.utils.config import *
-import numpy as np
-import torch
+from datetime import datetime
+
 from torchmetrics.classification import BinaryConfusionMatrix
 
+from src.dataset import PubmedSubgraph
+from src.model import *
+from src.utils.config import *
+from src.utils.utility import *
 
 warnings.filterwarnings("ignore")
 random.seed(SEED)
@@ -18,6 +18,7 @@ current_date = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
 number_of_examples = 3
 correct_threshold = 0.99
 wrong_threshold = 0.00001
+
 
 dataset = PubmedSubgraph(dataset_name="Pubmed Subgraph",
                          url=DATASET_URL,
@@ -61,7 +62,7 @@ print(conf_matrix_metrics(confusion_matrix))
 
 plot_confusion_matrix(confusion_matrix)
 
-authors_rdd = sc.textFile(RAW_DIR + "/authors").map(eval).map(lambda x: (json.loads(x[0])['orcid'], x[1]))  # (orcid, index)
+authors_rdd = sc.textFile(RAW_DIR + "/authors").map(eval).map(lambda x: (format_author_for_print(x[0]), x[1]))  # (orcid, index)
 
 print("Example of inferred correct edges")
 correct_edges = (edge_scores > correct_threshold).nonzero(as_tuple=False)[0:number_of_examples].squeeze(1).tolist()

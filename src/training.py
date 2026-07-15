@@ -3,11 +3,12 @@ import random
 import warnings
 from datetime import datetime
 
-from torch.utils.tensorboard import SummaryWriter
-
-from src.dgl_graph.dataset import PubmedSubgraph
+from dataset import PubmedSubgraph
+from model import AttentiveGraphSAGE4
 from src.utils.config import *
 from src.utils.utility import *
+
+from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.classification import BinaryConfusionMatrix
 
 warnings.filterwarnings("ignore")

@@ -14,7 +14,7 @@ DATA_DIR: str = str(DATA_ROOT / "pubmed_subgraph" / "processed")
 AUTHORS_SIMREL_DIR: str = str(DATA_ROOT / "authors_simrel")
 
 # MODEL PARAMETERS
-BEST_MODEL_PATH: str = str(MODELS_ROOT / "pretrained" / "AttentiveGraphSAGE4-epoch691.ckpt.pth")
+BEST_MODEL_PATH: str = str(MODELS_ROOT / "AttentiveGraphSAGE4-epoch691.ckpt.pth")
 INPUT_FEATURES: int = 768
 H_FEATURES: int = 100
 

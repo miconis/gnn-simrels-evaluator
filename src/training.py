@@ -1,0 +1,128 @@
+import copy
+import random
+import warnings
+from datetime import datetime
+
+from torch.utils.tensorboard import SummaryWriter
+
+from src.dgl_graph.dataset import PubmedSubgraph
+from src.utils.config import *
+from src.utils.utility import *
+from torchmetrics.classification import BinaryConfusionMatrix
+
+warnings.filterwarnings("ignore")
+random.seed(SEED)
+np.random.seed(SEED)
+os.environ["DGLBACKEND"] = "pytorch"
+min_valid_loss = np.inf
+best_model_path = BEST_MODEL_PATH
+load_saved_model = True
+current_date = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+
+dataset = PubmedSubgraph(dataset_name="Pubmed Subgraph",
+                         url=DATASET_URL,
+                         raw_dir=RAW_DIR,
+                         save_dir=DATA_DIR)
+
+full_graph = dataset.get_graph()
+
+(train_pos_graph,
+ train_neg_graph,
+ valid_pos_graph,
+ valid_neg_graph,
+ test_pos_graph,
+ test_neg_graph) = dataset.get_simrel_splittings(train_ratio=TRAIN_RATIO, valid_ratio=VALID_RATIO, test_ratio=TEST_RATIO)
+print("SIMILARITY RELATIONSHIPS")
+print(f"Train - pos: {train_pos_graph.num_edges()}, neg: {train_neg_graph.num_edges()}")
+print(f"Validation - pos: {valid_pos_graph.num_edges()}, neg: {valid_neg_graph.num_edges()}")
+print(f"Test - pos: {test_pos_graph.num_edges()}, neg: {test_pos_graph.num_edges()}")
+
+(potentially_equates_graph,
+ colleague_graph,
+ citation_graph,
+ collaboration_graph) = dataset.get_node_embeddings_graphs()
+print("NODE EMBEDDINGS GRAPHS")
+print("Potentially equates", potentially_equates_graph)
+print("Colleague", colleague_graph)
+print("Citation", citation_graph)
+print("Collaboration", collaboration_graph)
+
+node_features = full_graph.ndata["feat"]["author"]
+
+model = AttentiveGraphSAGE4(in_feats=INPUT_FEATURES,
+                            h_feats=H_FEATURES,
+                            potentially_equates_graph=potentially_equates_graph,
+                            colleague_graph=colleague_graph,
+                            citation_graph=citation_graph,
+                            collaboration_graph=collaboration_graph)
+optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+loss = binary_cross_entropy
+
+print("Starting training process")
+run_dir = os.path.join(LOG_DIR, model.__class__.__name__, current_date)
+checkpoint_dir = os.path.join(run_dir, "checkpoints")
+tensorboard_dir = os.path.join(run_dir, "tensorboard")
+os.makedirs(checkpoint_dir, exist_ok=True)
+log_dir = checkpoint_dir + os.sep
+train_writer = SummaryWriter(log_dir=os.path.join(tensorboard_dir, "training"))
+valid_writer = SummaryWriter(log_dir=os.path.join(tensorboard_dir, "validation"))
+test_writer = SummaryWriter(log_dir=os.path.join(tensorboard_dir, "testing"))
+
+# start server: tensorboard --logdir <project-root>/runs
+
+# TRAINING
+# uncomment when resume training
+# load_checkpoint(model, optimizer, best_model_path)
+# min_valid_loss = 0.3014
+counter = EARLY_STOPPING
+for e in range(1, EPOCHS+1):
+    model.train()
+    pos_score = model(train_pos_graph, node_features)
+    neg_score = model(train_neg_graph, node_features)
+
+    train_acc = model.compute_accuracy(pos_score, neg_score)
+    train_loss = model.compute_loss(pos_score, neg_score)
+    train_writer.add_scalar("Loss", train_loss, e)
+    train_writer.add_scalar("Accuracy", train_acc, e)
+    optimizer.zero_grad()
+    train_loss.backward()
+    optimizer.step()
+
+    model.eval()
+    with torch.no_grad():
+        valid_pos_score = model(valid_pos_graph, node_features)
+        valid_neg_score = model(valid_neg_graph, node_features)
+
+        valid_loss = model.compute_loss(valid_pos_score, valid_neg_score)
+        valid_acc = model.compute_accuracy(valid_pos_score, valid_neg_score)
+        valid_writer.add_scalar("Loss", valid_loss, e)
+        valid_writer.add_scalar("Accuracy", valid_acc, e)
+        print(f"In epoch {e:03d} - train loss: {train_loss:.4f} - train acc: {train_acc:.4f} - valid loss: {valid_loss:.4f} - valid acc: {valid_acc:.4f}")
+
+    if min_valid_loss >= valid_loss:
+        counter = EARLY_STOPPING
+        min_valid_loss = valid_loss
+        best_model = copy.deepcopy(model)
+        best_model_path = save_checkpoint(model, optimizer, e, log_dir)
+    counter -= 1
+    if counter <= 0:
+        print("Early stopping!")
+        break
+
+# EVALUATION
+print(f"Best model location: {best_model_path}")
+load_checkpoint(model, optimizer, best_model_path)
+model.eval()
+test_pos_score = model(test_pos_graph, node_features)
+test_neg_score = model(test_neg_graph, node_features)
+
+test_loss = model.compute_loss(test_pos_score, test_neg_score)
+test_acc = model.compute_accuracy(test_pos_score, test_neg_score)
+
+bcm = BinaryConfusionMatrix(threshold=CUT_THRESHOLD)
+confusion_matrix = bcm(torch.cat([test_pos_score, test_neg_score]), torch.cat([torch.ones(test_pos_score.shape[0]), torch.zeros(test_neg_score.shape[0])]))
+test_writer.add_figure(f"Confusion matrix", plot_confusion_matrix(confusion_matrix))
+
+train_writer.close()
+valid_writer.close()
+test_writer.close()

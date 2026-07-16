@@ -1,6 +1,6 @@
 from pyspark.sql import SparkSession
 from dgl.data import DGLDataset
-from src.utils.utility import *
+from src.utils.functions import *
 import torch
 from dgl.data.utils import save_graphs, load_graphs
 import dgl
@@ -43,6 +43,7 @@ class PubmedSubgraph(DGLDataset):
         "potentiallyequivalent_rels",
         "equivalent_rels",
         "simrels",
+        "simrels_dedup",
     )
 
     def __init__(self,
@@ -356,13 +357,21 @@ class PubmedSubgraph(DGLDataset):
         equivalent_rels_tensor = torch.LongTensor(equivalent_rels.collect())
 
         # SIMRELS
-        print("Processing SIMILARITY Relations")
+        print("Processing SIMILARITY Relations for training")
         similarity_rels = self.sc.textFile(self.raw_dir + "/simrels").map(eval)
         similarity_rels = similarity_rels.join(authors_for_join)
         similarity_rels = similarity_rels.map(lambda x: (x[1][0], x[1][1]))
         similarity_rels = similarity_rels.join(authors_for_join)
         similarity_rels = similarity_rels.map(lambda x: [x[1][0], x[1][1]])
         similarity_rels_tensor = torch.LongTensor(similarity_rels.collect())
+
+        print("Processing SIMILARITY Relations from dedup")
+        similarity_rels_dedup = self.sc.textFile(self.raw_dir + "/simrels_dedup").map(eval)
+        similarity_rels_dedup = similarity_rels_dedup.join(authors_for_join)
+        similarity_rels_dedup = similarity_rels_dedup.map(lambda x: (x[1][0], x[1][1]))
+        similarity_rels_dedup = similarity_rels_dedup.join(authors_for_join)
+        similarity_rels_dedup = similarity_rels_dedup.map(lambda x: [x[1][0], x[1][1]])
+        similarity_rels_dedup_tensor = torch.LongTensor(similarity_rels_dedup.collect())
 
         self.graph = dgl.heterograph(
             data_dict={
@@ -373,7 +382,8 @@ class PubmedSubgraph(DGLDataset):
                 ("publication", "is_written_by", "author"): (writes_rels_tensor[:, 1], writes_rels_tensor[:, 0]),
                 ("author", "potentially_equates", "author"): (potentiallyequivalent_rels_tensor[:, 0], potentiallyequivalent_rels_tensor[:, 1]),
                 ("author", "equates", "author"): (equivalent_rels_tensor[:, 0], equivalent_rels_tensor[:, 1]),
-                ("author", "similar", "author"): (similarity_rels_tensor[:, 0], similarity_rels_tensor[:, 1])
+                ("author", "similar", "author"): (similarity_rels_tensor[:, 0], similarity_rels_tensor[:, 1]),
+                ("author", "similar_for_dedup", "author"): (similarity_rels_dedup_tensor[:, 0], similarity_rels_dedup_tensor[:, 1])
             },
             num_nodes_dict={
                 "author": authors_tensor.shape[0],
@@ -472,3 +482,6 @@ class PubmedSubgraph(DGLDataset):
 
     def get_orcids_graph(self):
         return dgl.edge_type_subgraph(self.graph, ['equates'])
+
+    def get_dedup_graph(self):
+        return dgl.edge_type_subgraph(self.graph, ['similar_for_dedup'])

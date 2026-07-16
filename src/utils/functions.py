@@ -1,17 +1,19 @@
+import glob
 import hashlib
 import json
+import os
+from ast import literal_eval
+from collections import Counter
+from pathlib import Path
 
 import dgl
-from unidecode import unidecode
-import os
-import glob
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
+import torch
+import torch.nn.functional as F
 from sklearn import metrics
 from tqdm import tqdm
-import torch.nn.functional as F
-
-from src.utils.models import *
+from unidecode import unidecode
 
 
 def create_author_id(fullname, pub_id):
@@ -263,3 +265,117 @@ def plot_confusion_matrix(conf_matrix):
     plt.ylabel("Label", fontsize=18)
     plt.show()
     return fig
+
+
+def format_author_for_print(author):
+    data = json.loads(author)
+    return f"{data['fullname']} (ORCID: {data['orcid']})"
+
+
+def parse_indexed_author(line):
+    """Return ``(node_index, orcid)`` from a raw authors dataset line."""
+    serialized_author, node_index = literal_eval(line)
+    author = json.loads(serialized_author)
+    return int(node_index), author.get("orcid", "")
+
+
+def build_orcid_labels(spark_context, raw_dir, num_nodes):
+    indexed_orcids = spark_context.textFile(
+        str(Path(raw_dir) / "authors")
+    ).map(parse_indexed_author)
+
+    orcid_to_label = dict(
+        indexed_orcids
+        .map(lambda item: item[1])
+        .distinct()
+        .zipWithIndex()
+        .collect()
+    )
+    broadcast_labels = spark_context.broadcast(orcid_to_label)
+    try:
+        labels = (
+            indexed_orcids
+            .map(lambda item: (item[0], broadcast_labels.value[item[1]]))
+            .sortByKey(ascending=True)
+            .values()
+            .collect()
+        )
+    finally:
+        broadcast_labels.unpersist()
+
+    if len(labels) != num_nodes:
+        raise ValueError(
+            f"Expected {num_nodes} author labels, found {len(labels)} in the raw dataset"
+        )
+    return torch.tensor(labels, dtype=torch.int64)
+
+
+def prune_similarity_relations(simrels, scores, threshold):
+    return simrels[scores >= threshold]
+
+
+def connected_components_from_simrels(num_nodes, simrels):
+    """Build an adjacency list and reuse ``transitive_closure`` for clustering."""
+    neighbors = [set() for _ in range(num_nodes)]
+    for source, target in simrels.tolist():
+        neighbors[source].add(target)
+        neighbors[target].add(source)
+    return transitive_closure(neighbors).long()
+
+
+def _count_pairs(labels):
+    return sum(count * (count - 1) // 2 for count in Counter(labels).values())
+
+
+def pairwise_metrics(orcids, groups):
+    """Compute pairwise precision, recall and F1 without materializing all pairs."""
+    true_labels = orcids.reshape(-1).tolist()
+    predicted_labels = groups.reshape(-1).tolist()
+
+    true_pairs = _count_pairs(true_labels)
+    predicted_pairs = _count_pairs(predicted_labels)
+    true_positive_pairs = _count_pairs(zip(true_labels, predicted_labels))
+
+    precision = true_positive_pairs / predicted_pairs if predicted_pairs else 0.0
+    recall = true_positive_pairs / true_pairs if true_pairs else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return precision, recall, f1
+
+
+def compute_threshold_statistics(correct_simrels_mask, orcids, groups):
+    simrels_accuracy = (
+        correct_simrels_mask.float().mean().item()
+        if correct_simrels_mask.numel()
+        else float("nan")
+    )
+    singleton_fraction = (
+        compute_singleton_block(groups).item() / len(groups)
+        if len(groups)
+        else 0.0
+    )
+    precision, recall, f1 = pairwise_metrics(orcids, groups)
+    return {
+        "simrels_accuracy": simrels_accuracy,
+        "singleton_fraction": singleton_fraction,
+        "precision": precision,
+        "recall": recall,
+        "F1": f1,
+    }
+
+
+def plot_threshold_results(results):
+    thresholds = sorted(results)
+    metric_names = list(results[thresholds[0]])
+
+    plt.figure(figsize=(10, 6))
+    for metric_name in metric_names:
+        values = [results[threshold][metric_name] for threshold in thresholds]
+        plt.plot(thresholds, values, marker="o", label=metric_name)
+
+    plt.xlabel("Threshold")
+    plt.ylabel("Score")
+    plt.title("Evaluation metrics by similarity-score threshold")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()

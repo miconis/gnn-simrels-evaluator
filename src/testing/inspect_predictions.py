@@ -7,7 +7,7 @@ from torchmetrics.classification import BinaryConfusionMatrix
 from src.dataset import PubmedSubgraph
 from src.model import *
 from src.utils.config import *
-from src.utils.utility import *
+from src.utils.functions import *
 
 warnings.filterwarnings("ignore")
 random.seed(SEED)
